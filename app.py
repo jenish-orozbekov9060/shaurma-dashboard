@@ -1,179 +1,161 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
 # ============================================================
-# НАСТРОЙКИ ПАРТНЕРА (Меняйте это поле для каждого дашборда!)
+# НАСТРОЙКИ ШАУРМЫ
 # ============================================================
-PARTNER_NAME = "Шаурма на углях" # <-- ВПИШИТЕ СЮДА: "Дом плова" или "Ди-2" или "Шаурма на углях"
-# ============================================================
+PARTNER_NAME = "Шаурма на углях"
+EXCEL_PATH = "data.xlsx" # Файл с причинами отмен
+REASON_COLUMN = "Причина отмены" # Колонка в Excel
 
-st.set_page_config(page_title=f"Пульт Качества ({PARTNER_NAME})", layout="wide")
-st.title(f"Пульт Качества: {PARTNER_NAME}")
-st.caption("Период анализа: 19 октября — 15 ноября 2026 года")
+GREEN = "#2E9E4F"
+RED = "#D64545"
 
-# ТАРГЕТЫ (ЦЕЛИ)
-TARGETS = {
-    "cancels": 0.80,
-    "wrongs": 0.60,
-    "bf": 0.30
+# ТАРГЕТЫ
+TARGETS = {"cancels": 0.80, "wrongs": 0.60, "bf": 0.30}
+
+# ДАННЫЕ (взяты из ваших скриншотов BI)
+KPI = {
+    "cancels": {"label": "Отмены", "pct": 0.80, "count": 2885},
+    "wrongs": {"label": "Вронги", "pct": 0.66, "count": 2361},
+    "bf": {"label": "БФ", "pct": 0.32, "count": 1151},
 }
 
-# Функция для отрисовки красивой карточки
-def render_metric_card(col, label, value, target):
-    color = "#2E9E4F" if value <= target else "#D64545"
+POINTS = {
+    "Сухомлинова, 19": {"wrongs": (0.46, 2, 438), "bf": (0.68, 3, 438)},
+    "Дэн Сяопина, 34": {"wrongs": (0.59, 4, 674), "bf": (0.59, 4, 674)},
+}
+
+DYNAMICS = {
+    "months": ["Октябрь", "Ноябрь"],
+    "wrongs": [0.56, 0.66],
+    "bf": [0.22, 0.45],
+}
+
+# ============================================================
+# ФУНКЦИИ
+# ============================================================
+def fmt_pct(value: float) -> str:
+    return f"{value:.2f}".replace(".", ",") + "%"
+
+def render_metric_card(col, label, value, target, count):
+    color = GREEN if value <= target else RED
     diff = value - target
     diff_text = f"+{diff:.2f}%" if diff > 0 else f"{diff:.2f}%"
+    count_str = format(count, ",").replace(",", " ")
     
     col.markdown(
         f"""
-        <div style="padding:10px; border-radius:8px; background-color:#f8f9fa; text-align:center; border: 1px solid #ddd; height: 100%;">
+        <div style="padding:10px; border-radius:8px; background-color:#f8f9fa; text-align:center; border: 1px solid #ddd;">
             <div style="font-size:14px; color:#666; margin-bottom:4px; font-weight:bold;">{label}</div>
-            <div style="font-size:28px; font-weight:bold; color:{color};">{value:.2f}%</div>
-            <div style="font-size:12px; color:#888;">Цель: ≤ {target}%</div>
+            <div style="font-size:28px; font-weight:bold; color:{color};">{fmt_pct(value)}</div>
+            <div style="font-size:12px; color:#888;">{count_str} шт.</div>
+            <div style="font-size:12px; color:#888; margin-top:4px;">Цель: ≤ {target}%</div>
             <div style="font-size:12px; color:{color}; font-weight:bold;">({diff_text})</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-file_path = "data.xlsx"
+@st.cache_data(show_spinner=False)
+def load_cancels(path: str) -> pd.DataFrame:
+    try:
+        raw = pd.read_excel(path, header=None)
+        header_row = raw.index[raw.apply(lambda r: REASON_COLUMN in r.values, axis=1)]
+        if len(header_row) == 0:
+            return pd.DataFrame()
+        df = pd.read_excel(path, header=int(header_row[0]))
+        return df.dropna(subset=[REASON_COLUMN])
+    except Exception:
+        return pd.DataFrame()
 
-try:
-    # ЧИТАЕМ ПЕРВЫЙ ЛИСТ (sheet_name=0), независимо от его названия
-    raw_df = pd.read_excel(file_path, sheet_name=0, header=None)
+# ============================================================
+# ОТРИСОВКА
+# ============================================================
+st.set_page_config(page_title=f"Пульт Качества ({PARTNER_NAME})", layout="wide")
+st.title(f"Пульт Качества: {PARTNER_NAME}")
+st.caption("Период анализа: 19 октября — 15 ноября 2026 года")
 
-    # ============================================================
-    # 1. ПОИСК ТАБЛИЦЫ ФИЛИАЛОВ
-    # ============================================================
-    start_row = None
-    for i, row in raw_df.iterrows():
-        if str(row[0]).strip() == "Итого":
-            start_row = i
-            break
-            
-    if start_row is not None:
-        header_row = start_row - 1
-        df_branches = raw_df.iloc[start_row : start_row + 10].copy() 
-        df_branches.columns = raw_df.iloc[header_row].values
+# 1. ВЕРХНИЙ БЛОК KPI
+st.subheader(f"🏢 Общая картина: {PARTNER_NAME}")
+c1, c2, c3 = st.columns(3)
+
+render_metric_card(c1, KPI["cancels"]["label"], KPI["cancels"]["pct"], TARGETS["cancels"], KPI["cancels"]["count"])
+render_metric_card(c2, KPI["wrongs"]["label"], KPI["wrongs"]["pct"], TARGETS["wrongs"], KPI["wrongs"]["count"])
+render_metric_card(c3, KPI["bf"]["label"], KPI["bf"]["pct"], TARGETS["bf"], KPI["bf"]["count"])
+
+st.divider()
+
+# 2. ГРАФИКИ (Сравнение точек и Динамика)
+st.subheader("📍 Детализация по точкам и Динамика")
+col_left, col_right = st.columns(2)
+
+with col_left:
+    names = list(POINTS.keys())
+    wrongs = [POINTS[n]["wrongs"][0] for n in names]
+    bfs = [POINTS[n]["bf"][0] for n in names]
+
+    fig = go.Figure()
+    fig.add_bar(name="Вронги, %", x=names, y=wrongs, marker_color=[GREEN if v <= TARGETS["wrongs"] else RED for v in wrongs], text=[fmt_pct(v) for v in wrongs], textposition="outside")
+    fig.add_bar(name="БФ, %", x=names, y=bfs, marker_color=[GREEN if v <= TARGETS["bf"] else RED for v in bfs], marker_pattern_shape="/", text=[fmt_pct(v) for v in bfs], textposition="outside")
+    
+    fig.add_hline(y=TARGETS["wrongs"], line_dash="dash", line_color="#E6A700", annotation_text="Цель вронгов 0,60%", annotation_position="top left")
+    fig.add_hline(y=TARGETS["bf"], line_dash="dash", line_color="#2E9E4F", annotation_text="Цель БФ 0,30%", annotation_position="bottom left")
+    
+    fig.update_layout(barmode="group", title="Сравнение точек с таргетами", yaxis_title="%", yaxis_range=[0, 0.9], legend=dict(orientation="h", y=-0.15), margin=dict(t=40))
+    st.plotly_chart(fig, use_container_width=True)
+
+with col_right:
+    fig2 = go.Figure()
+    fig2.add_scatter(x=DYNAMICS["months"], y=DYNAMICS["wrongs"], mode="lines+markers+text", name="Вронги, %", line=dict(color="#1f77b4", width=3), text=[fmt_pct(v) for v in DYNAMICS["wrongs"]], textposition="top center")
+    fig2.add_scatter(x=DYNAMICS["months"], y=DYNAMICS["bf"], mode="lines+markers+text", name="БФ, %", line=dict(color="#9467bd", width=3), text=[fmt_pct(v) for v in DYNAMICS["bf"]], textposition="top center")
+    
+    fig2.add_hline(y=TARGETS["wrongs"], line_dash="dash", line_color="#1f77b4", annotation_text="Цель вронгов", annotation_position="top left")
+    fig2.add_hline(y=TARGETS["bf"], line_dash="dash", line_color="#9467bd", annotation_text="Цель БФ", annotation_position="bottom left")
+    
+    fig2.update_layout(title="Динамика: Октябрь → Ноябрь", yaxis_title="%", yaxis_range=[0, 0.85], legend=dict(orientation="h", y=-0.15), margin=dict(t=40))
+    st.plotly_chart(fig2, use_container_width=True)
+
+st.divider()
+
+# 3. ПРИЧИНЫ ОТМЕН И АНАЛИТИКА
+st.subheader("📝 Причины отмен и Аналитика")
+col_bot_left, col_bot_right = st.columns(2)
+
+with col_bot_left:
+    cancels_df = load_cancels(EXCEL_PATH)
+    if not cancels_df.empty:
+        top5 = cancels_df[REASON_COLUMN].value_counts().head(5).reset_index()
+        top5.columns = ["Причина", "Кол-во"]
         
-        cols_to_keep = ['Филиал', 'Заказы с ID', 'Все отмены', 'Партн. отмены', 'Неверные', 'Бэдфуд']
-        available_cols = [c for c in cols_to_keep if c in df_branches.columns]
-        df_branches = df_branches[available_cols].dropna(subset=['Филиал'])
-        df_branches = df_branches[df_branches['Филиал'] != ''] 
+        fig3 = go.Figure(go.Bar(
+            x=top5["Кол-во"], y=top5["Причина"], orientation='h',
+            marker_color='#4C78A8', text=top5["Кол-во"], textposition='auto',
+            textfont=dict(size=14, color='white')
+        ))
+        fig3.update_layout(xaxis_title="Количество отмен", yaxis=dict(autorange="reversed"), margin=dict(t=20, l=0, r=0, b=0), height=350)
+        st.plotly_chart(fig3, use_container_width=True)
+        st.caption(f"Всего отмен в Excel: {len(cancels_df)}")
+    else:
+        st.warning("Excel-файл с причинами отмен не найден или структура не совпадает (ожидается колонка 'Причина отмены').")
 
-        for col in cols_to_keep[1:]:
-            if col in df_branches.columns:
-                df_branches[col] = pd.to_numeric(df_branches[col], errors='coerce').fillna(0)
-
-        df_branches['Заказы с ID'] = df_branches['Заказы с ID'].replace(0, 1) 
+with col_bot_right:
+    st.success(f"**Общая картина по бренду:** Отмены ровно в таргете (0,80%). Это отличный показатель!")
+    st.markdown("---")
+    
+    for name, d in POINTS.items():
+        st.markdown(f"#### {name}")
         
-        df_branches['% Отмен'] = (df_branches['Партн. отмены'] / df_branches['Заказы с ID']) * 100
-        df_branches['% Неверных'] = (df_branches['Неверные'] / df_branches['Заказы с ID']) * 100
-        df_branches['% БФ'] = (df_branches['Бэдфуд'] / df_branches['Заказы с ID']) * 100
-
-        # ============================================================
-        # 2. ОБЩИЙ ТАРГЕТ ПО БРЕНДУ
-        # ============================================================
-        st.subheader(f"🏢 Общая картина: {PARTNER_NAME}")
-        total_row = df_branches[df_branches['Филиал'].str.contains('Итого', case=False, na=False)]
-        
-        if not total_row.empty:
-            c1, c2, c3 = st.columns(3)
-            render_metric_card(c1, "Отмены", total_row['% Отмен'].values[0], TARGETS['cancels'])
-            render_metric_card(c2, "Вронги", total_row['% Неверных'].values[0], TARGETS['wrongs'])
-            render_metric_card(c3, "БФ (Брак)", total_row['% БФ'].values[0], TARGETS['bf'])
+        wr_val = d["wrongs"][0]
+        if wr_val <= TARGETS["wrongs"]:
+            st.markdown(f"🟢 **Вронги (сборка): {fmt_pct(wr_val)}** — *В норме. Молодцы.*")
         else:
-            st.warning("Строка 'Итого' не найдена.")
+            st.markdown(f"🟡 **Вронги (сборка): {fmt_pct(wr_val)}** — *Выше цели. Нужен инструктаж.*")
 
-        st.divider()
-
-        # ============================================================
-        # 3. ТАРГЕТЫ ПО КАЖДОЙ ТОЧКЕ
-        # ============================================================
-        st.subheader("📍 Детализация по точкам (без строки 'Итого')")
-        
-        df_points = df_branches[~df_branches['Филиал'].str.contains('Итого', case=False, na=False)].copy()
-        
-        if not df_points.empty:
-            cols = st.columns(len(df_points))
-            
-            for idx, (index, row) in enumerate(df_points.iterrows()):
-                with cols[idx]:
-                    st.markdown(f"#### {row['Филиал']}")
-                    render_metric_card(st, "Отмены", row['% Отмен'], TARGETS['cancels'])
-                    st.write("") 
-                    render_metric_card(st, "Вронги", row['% Неверных'], TARGETS['wrongs'])
-                    st.write("")
-                    render_metric_card(st, "БФ (Брак)", row['% БФ'], TARGETS['bf'])
+        bf_val, bf_bad, bf_total = d["bf"]
+        if bf_val <= TARGETS["bf"]:
+            st.markdown(f"🟢 **БФ (качество): {fmt_pct(bf_val)}** — *Качество в норме.*")
         else:
-            st.info("Нет данных по отдельным филиалам.")
-
-        st.divider()
-
-        # ============================================================
-        # 4. ГРАФИК
-        # ============================================================
-        st.subheader("📊 Визуальное сравнение")
-        
-        fig = go.Figure()
-        fig.add_bar(name="Отмены, %", x=df_points['Филиал'], y=df_points['% Отмен'], marker_color='#D64545', text=df_points['% Отмен'].apply(lambda x: f"{x:.2f}%"), textposition="outside")
-        fig.add_bar(name="Вронги, %", x=df_points['Филиал'], y=df_points['% Неверных'], marker_color='#E6A700', text=df_points['% Неверных'].apply(lambda x: f"{x:.2f}%"), textposition="outside")
-        fig.add_bar(name="БФ, %", x=df_points['Филиал'], y=df_points['% БФ'], marker_color='#2E9E4F', text=df_points['% БФ'].apply(lambda x: f"{x:.2f}%"), textposition="outside")
-        
-        fig.add_hline(y=TARGETS['cancels'], line_dash="dash", line_color="#D64545", annotation_text=f"Цель отмен {TARGETS['cancels']}%", annotation_position="top left")
-        fig.add_hline(y=TARGETS['wrongs'], line_dash="dash", line_color="#E6A700", annotation_text=f"Цель вронгов {TARGETS['wrongs']}%", annotation_position="top left")
-        fig.add_hline(y=TARGETS['bf'], line_dash="dash", line_color="#2E9E4F", annotation_text=f"Цель БФ {TARGETS['bf']}%", annotation_position="bottom left")
-        
-        fig.update_layout(barmode='group', yaxis_title="%")
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.divider()
-
-        # ============================================================
-        # 5. ПРИЧИНЫ ПО ЧАСАМ
-        # ============================================================
-        hour_header_idx = None
-        for i, row in raw_df.iterrows():
-            if 'Час' in row.values and 'Причина' in row.values:
-                hour_header_idx = i
-                break
-
-        if hour_header_idx is not None:
-            df_hours = raw_df.iloc[hour_header_idx + 1:].copy()
-            df_hours.columns = raw_df.iloc[hour_header_idx].values
-            
-            cols_to_keep_h = ['Филиал', 'Час', 'Метрика', 'Причина', 'Случаев', 'Дат']
-            available_cols_h = [c for c in cols_to_keep_h if c in df_hours.columns]
-            df_hours = df_hours[available_cols_h].dropna(subset=['Час', 'Причина', 'Случаев'])
-            
-            df_hours['Случаев'] = pd.to_numeric(df_hours['Случаев'], errors='coerce').fillna(0)
-            df_hours['Дат'] = pd.to_numeric(df_hours['Дат'], errors='coerce').fillna(0)
-
-            df_hours_clean = df_hours[
-                (~df_hours['Час'].astype(str).str.contains('Все', case=False, na=False)) &
-                (~df_hours['Причина'].astype(str).str.contains('Все', case=False, na=False)) &
-                (df_hours['Час'].astype(str).str.contains(':', na=False))
-            ]
-
-            st.subheader("⏰ Когда и почему?")
-            if not df_hours_clean.empty:
-                branches_in_hours = df_hours_clean['Филиал'].dropna().unique()
-                selected_branch = st.selectbox("Выберите точку:", branches_in_hours)
-                
-                filtered_hours = df_hours_clean[df_hours_clean['Филиал'] == selected_branch]
-                
-                if not filtered_hours.empty:
-                    fig_reasons = px.bar(filtered_hours, x='Час', y='Случаев', color='Причина', 
-                                         title=f"Причины: {selected_branch}")
-                    st.plotly_chart(fig_reasons, use_container_width=True)
-                    
-                    st.markdown("---")
-                    st.subheader("📋 Детальный список")
-                    display_df_h = filtered_hours[['Час', 'Метрика', 'Причина', 'Случаев', 'Дат']].copy()
-                    display_df_h.columns = ['Время', 'Тип', 'Причина', 'Кол-во', 'Дней']
-                    st.dataframe(display_df_h, hide_index=True, use_container_width=True)
-
-except Exception as e:
-    st.error(f"Ошибка при чтении файла: {e}. Убедитесь, что файл 'data.xlsx' загружен и не поврежден.")
+            st.markdown(f"🔴 **БФ (качество): {fmt_pct(bf_val)}** — *Выше цели ({bf_bad} из {bf_total} заказов). Проверьте стандарты.*")
+        st.write("")
