@@ -11,7 +11,7 @@ EXCEL_PATH = "data.xlsx"
 PERIOD = "19 октября — 15 ноября 2026 года"
 
 GREEN, RED, YELLOW = "#2E9E4F", "#D64545", "#E6A700"
-TARGETS = {"cancels": 0.80, "wrongs": 0.60, "bf": 0.30}
+TARGETS = {"cancels": 0.50, "wrongs": 0.60, "bf": 0.30}
 
 KPI = {
     "cancels": {"label": "Отмены", "pct": 0.80, "count": 2885},
